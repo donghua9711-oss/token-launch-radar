@@ -163,14 +163,14 @@
       el('span', { class: 'count', text: state.tab === 'board' ? filtered().length + ' of ' + DATA.board_size + ' rows' : DATA.live.length + ' live shown' }));
   }
 
-  function sortHeader(key, label) {
+  function sortHeader(key, label, align) {
     var active = state.sort === key;
-    return el('th', { scope: 'col' },
+    return el('th', { scope: 'col', class: align === 'right' ? 'r' : '' },
       el('button', { type: 'button', onclick: function () {
         if (state.sort === key) state.dir = -state.dir;
         else { state.sort = key; state.dir = key === 'rank' || key === 'name' ? 1 : -1; }
         render();
-      } }, label, active ? el('span', { class: 'dir', 'aria-hidden': 'true', text: state.dir > 0 ? ' ^' : ' v' }) : null));
+      } }, label, active ? el('span', { class: 'dir', 'aria-hidden': 'true', text: state.dir > 0 ? ' \u2191' : ' \u2193' }) : null));
   }
 
   function boardTable() {
@@ -195,7 +195,7 @@
         onclick: function () { openDetail(r.slug); },
         onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
       },
-        el('td', { class: 'rank', text: String(r.rank) }),
+        el('td', { class: 'rank' + (r.rank <= 3 ? ' top' : ''), text: String(r.rank) }),
         el('td', null, el('div', { class: 'name' },
           el('b', { text: r.name }),
           r.watchlist ? el('span', null, el('span', { class: 'chip watch', text: 'watchlist' })) : null)),
@@ -203,7 +203,7 @@
         el('td', { class: 'sub', text: chainText }),
         el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
         el('td', { class: 'num ' + (r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg'), text: fmtPct(r.change_7d) }),
-        el('td', null, el('div', { class: 'implied' },
+        el('td', { class: 'num-cell' }, el('div', { class: 'implied' },
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / (max || 1)) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) }))),
         el('td', null, el('span', { class: 'chip ' + r.likelihood.toLowerCase(), text: r.likelihood })));
@@ -215,8 +215,8 @@
           el('caption', { class: 'sub', text: 'Pre-token protocols ranked by implied value. Select any row for its model breakdown and farm plan.' }),
           el('thead', null, el('tr', null,
             sortHeader('rank', 'Rank'), sortHeader('name', 'Protocol'), el('th', { scope: 'col', text: 'Category' }),
-            el('th', { scope: 'col', text: 'Chains' }), sortHeader('tvl', 'TVL'), sortHeader('growth', '7d'),
-            sortHeader('implied', 'Implied value'), sortHeader('like', 'Likelihood'))),
+            el('th', { scope: 'col', text: 'Chains' }), sortHeader('tvl', 'TVL', 'right'), sortHeader('growth', '7d', 'right'),
+            sortHeader('implied', 'Implied value', 'right'), sortHeader('like', 'Likelihood'))),
           tbody)));
   }
 
@@ -237,8 +237,8 @@
           el('caption', { class: 'sub', text: 'Already live: these tokens trade, so their market cap is a fact. They are kept off the board — and they are the calibration set: each category\u2019s multiple is the median of ratios like these.' }),
           el('thead', null, el('tr', null,
             el('th', { scope: 'col', text: 'Protocol' }), el('th', { scope: 'col', text: 'Category' }),
-            el('th', { scope: 'col', text: 'TVL' }), el('th', { scope: 'col', text: 'Market cap' }),
-            el('th', { scope: 'col', text: 'Mcap / TVL' }), el('th', { scope: 'col', text: '7d' }))),
+            el('th', { scope: 'col', class: 'r', text: 'TVL' }), el('th', { scope: 'col', class: 'r', text: 'Market cap' }),
+            el('th', { scope: 'col', class: 'r', text: 'Mcap / TVL' }), el('th', { scope: 'col', class: 'r', text: '7d' }))),
           tbody)));
   }
 
@@ -266,8 +266,8 @@
       el('div', { class: 'calib-wrap' },
         el('table', { class: 'calib' },
           el('thead', null, el('tr', null,
-            el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Live tokens' }),
-            el('th', { scope: 'col', text: 'Median mcap/TVL' }), el('th', { scope: 'col', text: 'Multiple used' }))),
+            el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', class: 'r', text: 'Live tokens' }),
+            el('th', { scope: 'col', class: 'r', text: 'Median mcap/TVL' }), el('th', { scope: 'col', class: 'r', text: 'Multiple used' }))),
           el('tbody', null, rows))));
   }
 

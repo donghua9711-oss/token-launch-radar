@@ -1,7 +1,7 @@
 // Launch Radar: a token-radar-01 entry (Node 22, standard library only).
 //
 // Reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the self-calibrating model in lib/model.ts, writes the ranked board
+// pre-token protocol with the self-calibrating model in lib/, writes the ranked board
 // to /output/board.json, writes the dashboard's data to /output/data.js (which the copied page
 // reads), copies this repository's dashboard/ and screenshots/ into /output, and finally writes
 // /output/dossier.json with the vendored make.fun library — the summary the judge reads.
@@ -15,7 +15,8 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
+import { boardIssue, buildRadar, dataScript } from './lib/board.ts';
+import { parseSnapshot } from './lib/snapshot.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
