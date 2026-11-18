@@ -1,8 +1,9 @@
 // Launch Radar's board: one sealed snapshot of the protocol universe in, one ranked board out.
 //
-// The board ranks every protocol that records no token yet — the snapshot's whole pre-token
-// universe, not a hand-picked list — by an implied value: what a token would be worth if it were
-// priced the way the market already prices live tokens of the same kind.
+// The board ranks the snapshot's whole clean pre-token universe — every protocol that records
+// no token and passes the watchlist rule's own visible exclusions, at any TVL (lib/snapshot.ts
+// isCleanPreToken) — by an implied value: what a token would be worth if it were priced the way
+// the market already prices live tokens of the same kind.
 //
 //   implied_value_usd = round( tvl_usd x category_multiple x growth_factor x age_factor )
 //
@@ -16,35 +17,44 @@
 //   1.6x and a bad one cuts it to 0.76x; an unreported change is neutral (factor 1).
 // - age_factor rewards time survived with no token: 0.85 + 0.3 x log10(1 + days_live / 30),
 //   capped to [0.85, 1.25]; an unknown listing date is neutral (factor 1).
+// - each row also carries a value range: its implied value re-priced at the low and high of its
+//   category multiple's leave-one-out refits (lib/calibrate.ts multipleRangeFor) — the spread
+//   the category's own evidence supports, widest where the evidence is thinnest.
+//
+// The model is tested, not just stated: lib/validate.ts fits the same multiples on half the
+// snapshot's live tokens and predicts the other half blind, against a flat global-multiple
+// baseline, and walks forward across TVL bands; the report rides in the dashboard's data.
+//
+// Which pre-token protocols the board carries: the clean universe, all of it. The watchlist
+// (40 protocols, the house's vetted floor) is inside it by construction — the exclusions here
+// are the watchlist's own, applied at every size instead of only at the floor — and the large
+// clean protocols the house's extra parent-protocol field kept off its list (a $2.76B curator,
+// a $320M prediction market) are ranked like everything else. What stays off is what the rule
+// itself names: wrapped, staked and bridged products, exchange reserve pages, versioned
+// deployments — none of them is a token that does not exist yet. Live tokens are never ranked:
+// they are set aside as the comps the model is fitted and tested on.
 //
 // A likelihood tier (separate from value) grades how launch-ready a protocol looks from size,
 // age, momentum and watchlist membership. Farm plans come from per-category playbooks
-// parameterised by the protocol's own name, chains and TVL tier. No protocol name is ever
-// special-cased: the same functions score and write every row.
-//
-// Which pre-token protocols the board carries: every watchlist slug (the house's own vetted
-// floor), plus every other pre-token protocol below the floor that is rankable — not an
-// exchange's reserves page (category CEX) and not a versioned deployment of another protocol.
-// A pre-token protocol at or above the floor that the house left off the watchlist stays off:
-// the house already judged it there, and what its rule names — wrapped, staked and bridged
-// products of tokens that already trade, exchanges, versioned pools — is not a token that does
-// not exist yet. Ranking WBTC or an exchange's reserves as a "future launch" would be the one
-// claim this board refuses to make.
+// parameterised by the protocol's own name, chains and TVL tier, and each plan is netted
+// against its row's implied value into a FARM / THIN / SKIP verdict (lib/farm.ts). No protocol
+// name is ever special-cased: the same functions score and write every row.
 //
 // This module is the assembly: it wires calibration (lib/calibrate.ts), the factors
-// (lib/factors.ts), the tier (lib/tiers.ts) and the farm plans (lib/farm.ts) into the board,
-// the dashboard's data and the gate's own pre-flight check.
+// (lib/factors.ts), the validation (lib/validate.ts), the tier (lib/tiers.ts) and the farm
+// plans (lib/farm.ts) into the board, the dashboard's data and the gate's own pre-flight check.
 
-import { calibrate, multipleFor } from './calibrate.ts';
+import { calibrate, liveComps, multipleFor, multipleRangeFor } from './calibrate.ts';
 import { ageFactor, growthFactor } from './factors.ts';
-import { farmSteps } from './farm.ts';
-import { ageDays, isPreToken, isRankable } from './snapshot.ts';
+import { farmPlan } from './farm.ts';
+import { ageDays, isCleanPreToken, isPreToken } from './snapshot.ts';
 import { likelihood } from './tiers.ts';
-import type { BoardRow, LiveRow, RadarData, Snapshot } from './types.ts';
+import type { BoardRow, LiveRow, RadarData, Snapshot, Verdict } from './types.ts';
 import { round4 } from './util.ts';
+import { validateModel } from './validate.ts';
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'calibrated-2';
+export const MODEL_VERSION = 'calibrated-3-validated';
 
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
 export const LIVE_ROWS = 30;
@@ -52,16 +62,21 @@ export const LIVE_ROWS = 30;
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot): BoardRow[] {
   const cal = calibrate(snapshot);
+  const comps = liveComps(snapshot);
   const watch = new Set(snapshot.watchlist);
   const scored = snapshot.protocols
-    .filter((p) => watch.has(p.slug) || (p.tvl_usd < snapshot.floor_usd && isRankable(p)))
+    .filter((p) => isCleanPreToken(p))
     .map((p) => {
       const days = ageDays(snapshot.as_of, p.listed_at);
       const mult = multipleFor(p, cal);
+      const range = multipleRangeFor(p, cal, comps);
       const gf = growthFactor(p.change_7d);
       const af = ageFactor(days);
       const implied = Math.max(1, Math.round(p.tvl_usd * mult * gf * af));
-      return { p, days, mult, gf, af, implied };
+      const low = Math.min(implied, Math.max(1, Math.round(p.tvl_usd * range.low * gf * af)));
+      const high = Math.max(implied, Math.max(1, Math.round(p.tvl_usd * range.high * gf * af)));
+      const plan = farmPlan(p, days, implied);
+      return { p, days, mult, gf, af, implied, low, high, plan };
     });
   scored.sort(
     (a, b) =>
@@ -85,13 +100,19 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     watchlist: watch.has(s.p.slug),
     age_days: s.days,
     implied_value_usd: s.implied,
+    implied_value_low_usd: s.low,
+    implied_value_high_usd: s.high,
     model: {
       category_multiple: s.mult,
       growth_factor: round4(s.gf),
       age_factor: round4(s.af),
       likelihood: likelihood(s.p, s.days, watch.has(s.p.slug)),
     },
-    farm_steps: farmSteps(s.p, s.days),
+    farm_cost_usd: s.plan.cost_usd,
+    farm_weeks: s.plan.weeks,
+    breakeven_pct: s.plan.breakeven_pct,
+    verdict: s.plan.verdict,
+    farm_steps: s.plan.steps,
   }));
 }
 
@@ -118,6 +139,8 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot);
   const cal = calibrate(snapshot);
+  const verdict_counts: Record<Verdict, number> = { FARM: 0, THIN: 0, SKIP: 0 };
+  for (const r of board) verdict_counts[r.verdict] += 1;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -129,6 +152,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     live_size: snapshot.protocols.filter((p) => !isPreToken(p)).length,
     global: cal.global,
     calibration: [...cal.byCategory.values()],
+    validation: validateModel(snapshot),
+    verdict_counts,
     rows: board.map((r) => ({
       rank: r.rank,
       slug: r.slug,
@@ -144,7 +169,13 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       growth_factor: r.model.growth_factor,
       age_factor: r.model.age_factor,
       implied_value_usd: r.implied_value_usd,
+      implied_value_low_usd: r.implied_value_low_usd,
+      implied_value_high_usd: r.implied_value_high_usd,
       likelihood: r.model.likelihood,
+      farm_cost_usd: r.farm_cost_usd,
+      farm_weeks: r.farm_weeks,
+      breakeven_pct: r.breakeven_pct,
+      verdict: r.verdict,
       farm_steps: r.farm_steps,
     })),
     live: liveRows(snapshot),
@@ -171,6 +202,9 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
   for (const r of board) {
     if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0 || r.implied_value_usd > 100_000_000_000_000) {
       return `${r.slug} has implied value ${r.implied_value_usd}`;
+    }
+    if (r.implied_value_low_usd > r.implied_value_usd || r.implied_value_high_usd < r.implied_value_usd) {
+      return `${r.slug} has a value range that misses its own implied value`;
     }
     if (r.farm_steps.length < 3 || r.farm_steps.length > 12) return `${r.slug} has ${r.farm_steps.length} farm steps`;
     for (const s of r.farm_steps) {

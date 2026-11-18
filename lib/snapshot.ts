@@ -1,6 +1,6 @@
 // The sealed snapshot: its parser, and the vocabulary the rest of the model speaks
-// about it — a protocol's age, whether it records a token, and whether the board
-// may rank it at all.
+// about it — a protocol's age, whether it records a token, and whether it belongs
+// to the clean pre-token universe the board ranks.
 
 import { SnapshotError } from './types.ts';
 import type { Snapshot, SnapshotProtocol } from './types.ts';
@@ -21,12 +21,41 @@ export function isPreToken(p: SnapshotProtocol): boolean {
   return p.gecko_id === null && p.symbol === null;
 }
 
+/** The categories the house's watchlist rule excludes: plumbing and exchange reserves, not launches. */
+const EXCLUDED_CATEGORIES = new Set([
+  'Bridge',
+  'Canonical Bridge',
+  'Liquid Staking',
+  'Liquid Restaking',
+  'Restaked BTC',
+  'CEX',
+]);
+
 /** DefiLlama's version-marker rule: a name ending in a release is a deployment of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
-/** Whether a below-floor pre-token protocol is the board's business: not an exchange, not a versioned pool. */
-export function isRankable(p: SnapshotProtocol): boolean {
-  return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name);
+/** A whole word that marks a wrapped or staked product of something else. */
+const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
+
+/** Exchange names a protocol may not begin with: those pages are reserves, not future tokens. */
+const EXCHANGE_PREFIXES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
+
+/**
+ * The clean pre-token universe, at ANY TVL: a protocol that records no token and passes every
+ * exclusion the house's watchlist rule states in the snapshot's own visible fields — category
+ * not plumbing or an exchange, no version-marker suffix, no whole word wrapped/staked/staking,
+ * no exchange-name prefix. (The house's 40 also used a parent-protocol field the snapshot does
+ * not carry; on visible fields alone this set is larger, and it contains the whole watchlist.)
+ * The board ranks exactly this set: the watchlist is its floor, never its ceiling, and size is
+ * no excuse to leave a clean protocol out — nor to let a wrapped product in.
+ */
+export function isCleanPreToken(p: SnapshotProtocol): boolean {
+  if (!isPreToken(p)) return false;
+  if (EXCLUDED_CATEGORIES.has(p.category ?? '')) return false;
+  if (VERSIONED.test(p.name)) return false;
+  if (WRAPPED_WORD.test(p.name)) return false;
+  if (EXCHANGE_PREFIXES.some((e) => p.name.startsWith(e))) return false;
+  return true;
 }
 
 /** The snapshot out of a file's text, refused unless it is the shape the model scores. */

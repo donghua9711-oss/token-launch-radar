@@ -2,6 +2,7 @@
 // No state, no input but their arguments — every module may lean on these.
 
 export const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
+export const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 export function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
@@ -12,4 +13,11 @@ export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/** A tiny deterministic hash of a slug, so wording and splits vary by row but never between runs. */
+export function slugHash(slug: string): number {
+  let h = 0;
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0;
+  return h;
 }

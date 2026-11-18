@@ -42,6 +42,9 @@ export interface GlobalCalibration {
 /** Launch-likelihood tiers, best first. */
 export type Likelihood = 'High' | 'Elevated' | 'Moderate' | 'Speculative';
 
+/** The farm verdict: whether a plan's cost is worth paying against the row's implied value. */
+export type Verdict = 'FARM' | 'THIN' | 'SKIP';
+
 /** One row of board.json. */
 export interface BoardRow {
   rank: number;
@@ -59,12 +62,20 @@ export interface BoardRow {
   watchlist: boolean;
   age_days: number | null;
   implied_value_usd: number;
+  /** The leave-one-out refit range around the implied value (lib/calibrate.ts). */
+  implied_value_low_usd: number;
+  implied_value_high_usd: number;
   model: {
     category_multiple: number;
     growth_factor: number;
     age_factor: number;
     likelihood: Likelihood;
   };
+  /** The farm plan's netting (lib/farm.ts): what the plan costs, over how long, and the verdict. */
+  farm_cost_usd: number;
+  farm_weeks: number;
+  breakeven_pct: number;
+  verdict: Verdict;
   farm_steps: string[];
 }
 
@@ -84,7 +95,13 @@ export interface RadarRow {
   growth_factor: number;
   age_factor: number;
   implied_value_usd: number;
+  implied_value_low_usd: number;
+  implied_value_high_usd: number;
   likelihood: Likelihood;
+  farm_cost_usd: number;
+  farm_weeks: number;
+  breakeven_pct: number;
+  verdict: Verdict;
   farm_steps: string[];
 }
 
@@ -100,6 +117,28 @@ export interface LiveRow {
   category_multiple: number;
 }
 
+/**
+ * The out-of-sample validation report (lib/validate.ts): the model fitted on one half of the
+ * snapshot's live tokens and tested blind on the other, plus a walk-forward across TVL bands.
+ * Every figure is computed from the snapshot at run time; nothing here is a constant.
+ */
+export interface ValidationReport {
+  comps: number;
+  train: number;
+  test: number;
+  model_median_log_error: number;
+  model_median_factor: number;
+  flat_median_log_error: number;
+  flat_median_factor: number;
+  model_within_2x_pct: number;
+  flat_within_2x_pct: number;
+  walk_forward_n: number;
+  walk_forward_median_log_error: number;
+  walk_forward_median_factor: number;
+  walk_forward_flat_median_log_error: number;
+  walk_forward_flat_median_factor: number;
+}
+
 /** Everything the dashboard renders. */
 export interface RadarData {
   as_of: string;
@@ -112,6 +151,8 @@ export interface RadarData {
   live_size: number;
   global: GlobalCalibration;
   calibration: Calibration[];
+  validation: ValidationReport;
+  verdict_counts: Record<Verdict, number>;
   rows: RadarRow[];
   live: LiveRow[];
 }

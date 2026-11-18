@@ -1,13 +1,15 @@
 // Launch Radar: a token-radar-01 entry (Node 22, standard library only).
 //
-// Reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the self-calibrating model in lib/, writes the ranked board
-// to /output/board.json, writes the dashboard's data to /output/data.js (which the copied page
-// reads), copies this repository's dashboard/ and screenshots/ into /output, and finally writes
-// /output/dossier.json with the vendored make.fun library — the summary the judge reads.
+// Reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores the
+// snapshot's whole clean pre-token universe with the self-calibrating, self-validating model
+// in lib/, writes the ranked board to /output/board.json, writes the dashboard's data to
+// /output/data.js (which the copied page reads), copies this repository's dashboard/ and
+// screenshots/ into /output, and finally writes /output/dossier.json with the vendored
+// make.fun library — the summary the judge reads.
 //
 // The run is deterministic: the same snapshot always writes the same bytes. No clock, no
-// randomness, no network; every sort carries an explicit tie-breaker.
+// randomness, no network; every sort carries an explicit tie-breaker, and the validation
+// report is a pure function of the snapshot.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -87,6 +89,7 @@ for (const name of shots) {
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: DASHBOARD_CAPS }));
 
 process.stdout.write(
-  `launch radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} pre-token rows ranked, ${radar.live_size} live-token protocols set aside\n` +
+  `launch radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} clean pre-token rows ranked, ${radar.live_size} live-token protocols set aside as comps\n` +
+    `launch radar: validation on ${radar.validation.comps} live comps — fitted on ${radar.validation.train}, tested blind on ${radar.validation.test}: median error x${radar.validation.model_median_factor} for the model against x${radar.validation.flat_median_factor} for a flat multiple\n` +
     `launch radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${pageFiles.length} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );

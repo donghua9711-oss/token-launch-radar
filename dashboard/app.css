@@ -1,7 +1,8 @@
 /* Launch Radar theme: a night-scope palette — deep ink navy, phosphor green for the signal,
-   amber for caution, one hairline blue-grey for structure. System type only, tabular numerals.
-   Numbers sit in the mono face and right-align so columns scan; prose sits in the sans.
-   Motion only answers the pointer (a 140ms wash or colour step), never the scroll. */
+   amber for caution, red reserved for the SKIP verdict, one hairline blue-grey for structure.
+   System type only, tabular numerals. Numbers sit in the mono face and right-align so columns
+   scan; prose sits in the sans. Motion only answers the pointer (a 140ms wash or colour step),
+   never the scroll. */
 :root {
   --bg: #060c12;
   --bg-2: #0a141e;
@@ -17,6 +18,7 @@
   --amber: #ffb454;
   --amber-dim: #7a5a24;
   --red: #ff6f61;
+  --red-dim: #7a362e;
   --radius: 10px;
   --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-num: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
@@ -73,6 +75,7 @@ button { cursor: pointer; }
 .stat span { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; }
 .stat b { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 19px; font-weight: 600; color: var(--green); }
 .stat b.plain { color: var(--ink); }
+.stat small { color: var(--faint); font-size: 11.5px; }
 
 /* controls */
 .controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--s3); padding: var(--s4); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
@@ -131,12 +134,17 @@ tbody tr[data-watch="true"] td.rank { color: var(--amber); }
 .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--green-dim), var(--green)); }
 .implied { display: flex; align-items: center; justify-content: flex-end; gap: var(--s2); }
 .implied .num { color: var(--green); font-weight: 600; }
+.valstack { display: grid; justify-items: end; gap: 0; }
+.range { color: var(--faint); font-family: var(--font-num); font-size: 11px; white-space: nowrap; }
 .chip { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; letter-spacing: .02em; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .chip.high { color: #06130c; background: var(--green); border-color: var(--green); }
 .chip.elevated { color: var(--green); border-color: var(--green-dim); background: rgba(61, 255, 158, .07); }
 .chip.moderate { color: var(--amber); border-color: var(--amber-dim); background: rgba(255, 180, 84, .06); }
 .chip.speculative { color: var(--faint); border-color: var(--line); }
 .chip.watch { color: var(--amber); border: 1px solid var(--amber-dim); background: rgba(255, 180, 84, .06); font-weight: 500; }
+.chip.farm { color: #06130c; background: var(--green); border-color: var(--green); }
+.chip.thin { color: var(--amber); border-color: var(--amber-dim); background: rgba(255, 180, 84, .06); }
+.chip.skip { color: var(--red); border-color: var(--red-dim); background: rgba(255, 111, 97, .06); }
 
 /* model section */
 .model { margin-top: var(--s4); padding: var(--s5); display: grid; gap: var(--s3); }

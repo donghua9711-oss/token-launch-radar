@@ -1,12 +1,38 @@
-// Farm plans: five concrete steps per protocol, written by its category's playbook and
-// parameterised by the protocol's own name, chains, TVL tier and age. Every step names
-// the action, what it costs and how long it takes; the wording is picked by a hash of
-// the slug, so rows differ in phrasing and runs agree byte for byte.
+// Farm plans: five concrete steps per protocol from its category's playbook, plus a sixth
+// that nets the plan up — what it costs in total, over how many weeks, and a verdict on
+// whether the cost is worth paying against the row's implied value.
+//
+// The netting rule (stated here because the dashboard states it too):
+//   total cost  = transaction fees over the plan (setup + core + one weekly action)
+//               + about 0.6% of the working capital in swap/borrow spread
+//               + the working capital's idle cost at 10% a year for the plan's weeks.
+//               The capital itself is NOT a cost: the farmer keeps it.
+//   break-even share = total cost / the row's implied value, in percent.
+//   verdict: FARM when the break-even share is at most 0.001% of the implied value —
+//            the plan pays for itself if one wallet captures a minuscule slice of the
+//            launch. THIN up to 0.005% — it pays only if the wallet earns a real slice,
+//            so size down. SKIP above that — the fees eat too much of any plausible
+//            slice at this size; watch the protocol, do not farm it.
+// Every step names the action, what it costs and how long it takes; the wording is picked
+// by a hash of the slug, so rows differ in phrasing and runs agree byte for byte.
 
-import type { SnapshotProtocol } from './types.ts';
+import type { SnapshotProtocol, Verdict } from './types.ts';
+import { round2, slugHash } from './util.ts';
+
+/** Break-even shares run from ~0.0000005% to ~0.01%: they are kept to 8 decimals so a big row's share never rounds away to zero. */
+const round8 = (n: number): number => Math.round(n * 1e8) / 1e8;
+
+/** Break-even share thresholds, in percent of the row's implied value (see the rule above). */
+export const FARM_MAX_BREAKEVEN_PCT = 0.001;
+export const THIN_MAX_BREAKEVEN_PCT = 0.005;
+
+/** The idle-capital rate the netting charges the plan, per year. */
+const IDLE_APR = 0.1;
+/** Swap/borrow spread charged on the working capital across the plan's core actions. */
+const SPREAD_SHARE = 0.006;
 
 /** The capital one farm position needs, from the protocol's own TVL tier. */
-function capitalFor(tvl: number): number {
+export function capitalFor(tvl: number): number {
   if (tvl >= 5_000_000_000) return 500;
   if (tvl >= 1_000_000_000) return 250;
   if (tvl >= 250_000_000) return 150;
@@ -15,7 +41,7 @@ function capitalFor(tvl: number): number {
 }
 
 /** How long to hold, from the protocol's age: younger protocols get the longer qualifying window. */
-function holdDaysFor(days: number | null): number {
+export function holdDaysFor(days: number | null): number {
   if (days === null) return 45;
   if (days < 180) return 90;
   if (days < 365) return 60;
@@ -42,11 +68,14 @@ function gasPhrase(chain: string | null): string {
   return 'about $0.10-$1 in network fees per transaction';
 }
 
-/** A tiny deterministic hash of the slug, so wording varies by row but never between runs. */
-function slugHash(slug: string): number {
-  let h = 0;
-  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0;
-  return h;
+/** The same chain cost as a number, for the netting: the mid of the phrase's band. */
+function gasCostUsd(chain: string | null): number {
+  if (chain === null) return 0.5;
+  const key = chain.toLowerCase();
+  if (key === 'ethereum') return 7;
+  if (TINY_GAS.has(key)) return 0.03;
+  if (CHEAP_GAS.has(key)) return 0.25;
+  return 0.5;
 }
 
 type Playbook = 'dex' | 'lending' | 'perps' | 'bridge' | 'yield' | 'staking' | 'nft' | 'gaming' | 'prediction' | 'fallback';
@@ -66,12 +95,28 @@ function playbookFor(category: string | null): Playbook {
   return 'fallback';
 }
 
+/** A break-even share small enough to print: two significant figures, plain decimals, never a row of zeros. */
+function fmtShare(pct: number): string {
+  if (pct >= 0.01) return `${pct.toPrecision(2)}%`;
+  return `${pct.toFixed(8).replace(/0+$/, '').replace(/\.$/, '')}%`;
+}
+
+/** One protocol's whole farm plan: the steps, and the netting the steps add up to. */
+export interface FarmPlan {
+  steps: string[];
+  capital_usd: number;
+  cost_usd: number;
+  weeks: number;
+  breakeven_pct: number;
+  verdict: Verdict;
+}
+
 /**
- * A protocol's farm plan: five concrete steps from its category's playbook, parameterised by its
- * name, its first chains, its TVL tier and its age. Every step names the action, what it costs
- * and how long it takes; the wording is picked by a hash of the slug so rows differ and runs agree.
+ * A protocol's farm plan: five concrete steps from its category's playbook, parameterised by
+ * its name, its first chains, its TVL tier and its age — then a closing step that nets the
+ * plan against the row's implied value and gives the verdict (see the rule at the top).
  */
-export function farmSteps(p: SnapshotProtocol, days: number | null): string[] {
+export function farmPlan(p: SnapshotProtocol, days: number | null, impliedValueUsd: number): FarmPlan {
   const name = p.name;
   const chains = p.chains.slice(0, 3);
   const chainText = chains.length > 0 ? chains.join(', ') : 'its main chain';
@@ -139,5 +184,30 @@ export function farmSteps(p: SnapshotProtocol, days: number | null): string[] {
       `Link the same wallet in ${name}'s app every time and complete every free onboarding step it offers (profile, quests, testnet badges) in the first week. Cost: ${gas} where an action is on-chain, otherwise free. Time: 30 minutes, once.`,
     ];
   }
-  return [setup, core[0]!, core[1]!, cadence, finish];
+
+  // The netting: fees for setup + core + one action a week, the spread on the capital, and
+  // the capital's idle cost — against the row's implied value, as the rule at the top states.
+  const weeks = Math.ceil(hold / 7);
+  const fees = (3 + weeks) * gasCostUsd(firstChain) + SPREAD_SHARE * capital;
+  const cost = round2(fees + capital * IDLE_APR * (weeks / 52));
+  const breakeven = round8((cost / Math.max(1, impliedValueUsd)) * 100);
+  const verdict: Verdict = breakeven <= FARM_MAX_BREAKEVEN_PCT ? 'FARM' : breakeven <= THIN_MAX_BREAKEVEN_PCT ? 'THIN' : 'SKIP';
+  const gloss =
+    verdict === 'FARM'
+      ? 'the plan pays for itself on a minuscule slice of the launch'
+      : verdict === 'THIN'
+        ? 'it pays only if the wallet earns a real slice, so size down and keep every week'
+        : 'the fees eat too much of any plausible slice at this size, so watch it instead of farming it';
+  const netting =
+    `Netting the plan up: about $${cost.toFixed(2)} of gas, spread and idle-capital cost over ~${weeks} weeks, on $${capital} of working capital that stays yours. ` +
+    `That breaks even if one wallet captures just ${fmtShare(breakeven)} of this row's implied value. Verdict: ${verdict} - ${gloss}.`;
+
+  return {
+    steps: [setup, core[0]!, core[1]!, cadence, finish, netting],
+    capital_usd: capital,
+    cost_usd: cost,
+    weeks,
+    breakeven_pct: breakeven,
+    verdict,
+  };
 }
