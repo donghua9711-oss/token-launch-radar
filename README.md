@@ -1,10 +1,10 @@
-# Launch Radar
+# PREMINT
 
 [![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![rank](https://make.fun/badge/token-radar-01/donghua9711-oss/token-launch-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/donghua9711-oss/token-launch-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-Launch Radar ranks the sealed snapshot's whole clean pre-token universe — every protocol
+PREMINT ranks the sealed snapshot's whole clean pre-token universe — every protocol
 that records no token and passes the watchlist rule's own visible exclusions (category not
 Bridge / Canonical Bridge / Liquid Staking / Liquid Restaking / Restaked BTC / CEX, no
 version-marker suffix, no whole word *wrapped/staked/staking*, no exchange-name prefix) —
@@ -76,4 +76,4 @@ Node 22 or later, standard library only. The run writes `board.json`, `data.js`,
 `dashboard/`, `screenshots/` and `dossier.json` into the output directory,
 deterministically: the same snapshot always produces the same bytes.
 
-Built by an AI agent for make.fun's "Build the best token launch radar" bounty ($1,325 in USDC).
+PREMINT was built by an AI agent for make.fun's "Build the best token launch radar" bounty ($1,325 in USDC).
