@@ -53,6 +53,13 @@
   var logSpan = Math.log(vMax) - Math.log(Math.max(1, vMin));
   function logPos(v) { return clamp01((Math.log(Math.max(1, v)) - Math.log(Math.max(1, vMin))) / (logSpan || 1)); }
 
+  // Widest single log-space factor contribution anywhere on the board: the detail drawer's
+  // diverging factor bars all share this scale, so a bar means the same thing on every row.
+  var logMax = 0;
+  DATA.rows.forEach(function (r) {
+    (r.factors || []).forEach(function (f) { if (Math.abs(f.log_contribution) > logMax) logMax = Math.abs(f.log_contribution); });
+  });
+
   function el(tag, attrs) {
     var node = document.createElement(tag);
     if (attrs) {
@@ -165,7 +172,7 @@
           ', not just above the $50M floor. All ', el('b', { text: String(DATA.watchlist_size) + ' watchlist protocols' }),
           ' are ranked, and so are the large clean protocols a floor-only board leaves out. Protocols whose token already trades are never ranked: they are set aside as the comparable set the model is fitted on \u2014 and blind-tested on, right. Each price is ',
           el('b', { text: 'TVL x the category\u2019s calibrated market-cap multiple' }),
-          ', adjusted for this week\u2019s growth and for how long the protocol has run with no token; the track under each value is the refit range its category\u2019s evidence supports. Implied value is a model\u2019s claim, never a promise.')),
+          ', adjusted by four fitted signals \u2014 size, the week\u2019s momentum, age and chain reach \u2014 in one log-linear model; the track under each value is the whole-model refit range its category\u2019s evidence supports. Implied value is a model\u2019s claim, never a promise.')),
       el('div', { class: 'tape', role: 'group', 'aria-label': 'Blind-test validation summary' },
         el('div', { class: 'tape-head' },
           el('span', { class: 'lab', text: 'Blind test' }),
@@ -177,7 +184,7 @@
             tapeRow('Median error', fmtX(V.model_median_factor), fmtX(V.flat_median_factor), true),
             tapeRow('Within 2x of actual', V.model_within_2x_pct + '%', V.flat_within_2x_pct + '%', false),
             tapeRow('Walk-forward error', fmtX(V.walk_forward_median_factor), fmtX(V.walk_forward_flat_median_factor), true))),
-        el('p', { class: 'tape-note', text: 'Walk-forward fits on smaller protocols and predicts larger ones (' + V.walk_forward_n + ' predictions): there the flat multiple wins, and the board says so. Full method below.' })));
+        el('p', { class: 'tape-note', text: 'Walk-forward fits on smaller protocols and predicts larger ones (' + V.walk_forward_n + ' predictions): ' + (V.walk_forward_median_factor <= V.walk_forward_flat_median_factor ? 'the model wins there too \u2014 ' + fmtX(V.walk_forward_median_factor) + ' against ' + fmtX(V.walk_forward_flat_median_factor) + ' flat.' : 'there the flat multiple wins, and the board says so.') + ' Full method below.' })));
   }
 
   function strip() {
@@ -200,7 +207,7 @@
         kpi('Watchlist covered', DATA.watchlist_size + ' / ' + DATA.watchlist_size, 'house floor, all ranked'),
         kpi('Top implied value', top ? fmtUsd(top.implied_value_usd) : 'n/a', top ? top.name : '', true),
         kpi('Blind-test error', fmtX(V.model_median_factor), 'flat multiple ' + fmtX(V.flat_median_factor)),
-        kpi('Walk-forward error', fmtX(V.walk_forward_median_factor), 'flat ' + fmtX(V.walk_forward_flat_median_factor) + ' wins there'),
+        kpi('Walk-forward error', fmtX(V.walk_forward_median_factor), 'flat ' + fmtX(V.walk_forward_flat_median_factor) + (V.walk_forward_median_factor <= V.walk_forward_flat_median_factor ? ' \u2014 model wins' : ' wins there')),
         kpi('Global multiple', fmtX(DATA.global.median_ratio), DATA.global.tokenized_count + ' live tokens fitted')),
       el('div', { class: 'dist', 'aria-label': 'Farm verdict distribution' },
         el('span', { class: 'lab', text: 'Verdict distribution \u2014 plan cost netted against implied value' }),
@@ -291,6 +298,8 @@
     var tbody = el('tbody');
     list.forEach(function (r) {
       var chainText = (r.chains || []).length ? r.chains.slice(0, 2).join(', ') + (r.chains.length > 2 ? ' +' + (r.chains.length - 2) : '') : 'unnamed chain';
+      var drv = null, drvAbs = 0;
+      (r.factors || []).forEach(function (f) { if (Math.abs(f.log_contribution) > drvAbs) { drvAbs = Math.abs(f.log_contribution); drv = f; } });
       var tr = el('tr', {
         'data-selected': state.selected === r.slug ? 'true' : 'false',
         'data-watch': r.watchlist ? 'true' : 'false',
@@ -302,7 +311,8 @@
         el('td', null, el('div', { class: 'name' },
           el('b', { text: r.name }),
           el('span', { class: 'slug', text: r.slug }),
-          r.watchlist ? el('span', null, el('span', { class: 'chip watch', text: 'watchlist' })) : null)),
+          r.watchlist ? el('span', null, el('span', { class: 'chip watch', text: 'watchlist' })) : null,
+          drv ? el('span', null, el('span', { class: 'chip drv', title: drv.label, text: drv.label.split(' \u2014 ')[0].toLowerCase() + ' ' + fmtX(drv.factor) })) : null)),
         el('td', { text: r.category || 'Uncategorized' }),
         el('td', { class: 'sub', text: chainText }),
         el('td', { class: 'r' }, el('div', { class: 'tvlcell' },
@@ -376,6 +386,7 @@
   function modelPanel() {
     var g = DATA.global;
     var vc = DATA.verdict_counts;
+    var wfWin = V.walk_forward_median_factor <= V.walk_forward_flat_median_factor;
     var maxMult = 0;
     DATA.calibration.forEach(function (c) { if (c.multiple > maxMult) maxMult = c.multiple; });
     var rows = DATA.calibration.map(function (c) {
@@ -391,15 +402,19 @@
       el('h2', { text: 'How PREMINT prices a token that does not exist yet' }),
       el('div', { class: 'model-grid' },
         el('div', null,
-          el('div', { class: 'formula', text: 'implied value = TVL x category multiple x growth factor x age factor' }),
+          el('div', { class: 'formula', text: 'implied value = TVL x 10^(category + size + momentum + age + chains + correction)' }),
           el('p', null,
             el('b', { text: 'Category multiple. ' }),
             'For every category, the multiple is the median market-cap / TVL ratio of that category\u2019s protocols whose token already trades in this same snapshot, shrunk toward the global median (',
             el('b', { text: fmtX(g.median_ratio) }), ' across ', el('b', { text: String(g.tokenized_count) }),
             ' live tokens) so thin categories cannot dominate, and clamped between x0.05 and x3.00. A category with no live token is priced at the global multiple. Nothing is priced by hand and no name is special-cased.'),
           el('p', null,
-            el('b', { text: 'Growth factor. ' }), '1 + clamp(7-day TVL change, -60%, +150%) / 250: a hot week lifts a row up to x1.60, a bad one cuts it to x0.76, an unreported change is neutral. ',
-            el('b', { text: 'Age factor. ' }), '0.85 + 0.3 x log10(1 + days live / 30), capped at x1.25: time run with no token is evidence a launch, when it comes, lands on a real product. An unknown listing date is neutral. ',
+            el('b', { text: 'Four fitted signals. ' }),
+            'On top of the multiple, one ridge regression fitted on the live comps\u2019 residuals adjusts for four signals in log space, so each signal is an additive contribution \u2014 every row\u2019s detail view draws all six as bars that sum to its multiple of TVL. ',
+            el('b', { text: 'Size ' }), 'pulls down: the larger a protocol\u2019s TVL against the comps\u2019 centre, the lower the multiple the market pays for it \u2014 the single strongest correction. ',
+            el('b', { text: 'Momentum ' }), 'pulls down too: the 7-day TVL change, winsorised to [-60%, +150%], mostly inflates the TVL denominator rather than the value; an unreported change is neutral. ',
+            el('b', { text: 'Age ' }), 'pulls down slightly: log time since listing, an unknown date at the centre. ',
+            el('b', { text: 'Chain reach ' }), 'lifts: each extra chain a protocol runs on is evidence of a real product. A fitted global correction closes the sum. ',
             el('b', { text: 'Likelihood ' }), 'grades launch-readiness from size, age, momentum and watchlist membership; it never moves the value, only the reader\u2019s eye.'),
           el('p', null,
             el('b', { text: 'Tested blind, not just fitted. ' }),
@@ -410,10 +425,12 @@
             el('b', { text: V.model_within_2x_pct + '%' }), ' against ', el('b', { text: V.flat_within_2x_pct + '%' }),
             '. Walked forward across TVL bands (fitted on smaller protocols only, predicting larger ones, ',
             el('b', { text: String(V.walk_forward_n) + ' predictions' }), '), the median error is ', el('b', { text: fmtX(V.walk_forward_median_factor) }),
-            ' against ', el('b', { text: fmtX(V.walk_forward_flat_median_factor) }), ' flat \u2014 the flat baseline wins that test: extrapolating upward in size is where the category edge thins, and the board says so rather than hiding it. Every figure in this paragraph is computed from the snapshot at run time.'),
+            ' against ', el('b', { text: fmtX(V.walk_forward_flat_median_factor) }), wfWin
+              ? ' flat \u2014 the model wins that test too: fitted only on smaller protocols, its size signal is what carries it when it extrapolates upward in size. Every figure in this paragraph is computed from the snapshot at run time.'
+              : ' flat \u2014 the flat baseline wins that test: extrapolating upward in size is where the category edge thins, and the board says so rather than hiding it. Every figure in this paragraph is computed from the snapshot at run time.'),
           el('p', null,
             el('b', { text: 'Ranges, not just points. ' }),
-            'Each row\u2019s track is its value range: the implied value re-priced at the low and high of its category multiple\u2019s leave-one-out refits \u2014 the multiple refitted once per live token of the category, each time leaving that token out. Thin evidence spreads wide; deep categories hold tight.'),
+            'Each row\u2019s track is its value range: the implied value re-priced at the low and high of leave-one-out refits of the whole model \u2014 multiples, centres and signal coefficients refitted once per live token of the category, each time leaving that token out. Thin evidence spreads wide; deep categories hold tight.'),
           el('p', null,
             el('b', { text: 'Farm verdicts. ' }),
             'Every plan is netted before it is shown: its gas, spread and idle-capital cost over its weeks, against the row\u2019s implied value. FARM when the cost breaks even at ',
@@ -427,7 +444,7 @@
           vizPair('Blind test \u2014 within 2x of actual (higher wins)', V.model_within_2x_pct, V.flat_within_2x_pct, V.model_within_2x_pct + '%', V.flat_within_2x_pct + '%', null),
           el('div', { style: 'height:14px' }),
           vizPair('Walk-forward \u2014 median error (lower wins)', V.walk_forward_median_factor, V.walk_forward_flat_median_factor, fmtX(V.walk_forward_median_factor), fmtX(V.walk_forward_flat_median_factor),
-            V.walk_forward_n + ' predictions, fitted on smaller protocols only. The flat multiple wins this one \u2014 reported, not buried.'),
+            V.walk_forward_n + ' predictions, fitted on smaller protocols only. ' + (wfWin ? 'The model wins this one too \u2014 the size signal carries the extrapolation.' : 'The flat multiple wins this one \u2014 reported, not buried.')),
           el('div', { style: 'height:20px' }),
           el('h3', { text: 'Calibration \u2014 the fitted multiples' }),
           el('div', { style: 'height:8px' }),
@@ -442,11 +459,18 @@
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
   dialog.addEventListener('close', function () { state.selected = null; writeHash(); render(); });
 
-  function factorBar(label, value, cap) {
-    return el('div', { class: 'fbar-row' },
-      el('span', { class: 'who', text: label }),
-      el('div', { class: 'vtrack model', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(2, clamp01(value / cap) * 100).toFixed(1) + '%' })),
-      el('span', { class: 'val', text: fmtX(value) }));
+  // One factor of the model, drawn as a diverging bar in log space: the bar runs from the
+  // centre zero line, right when the signal lifts the value, left when it cuts it, on the
+  // board-wide logMax scale. The label is the model's own templated sentence for this row.
+  function factorRow(f) {
+    var lc = f.log_contribution;
+    var w = logMax ? Math.abs(lc) / logMax * 50 : 0;
+    var style = lc < 0
+      ? 'left:' + (50 - w).toFixed(1) + '%;width:' + Math.max(1, w).toFixed(1) + '%'
+      : 'left:50%;width:' + Math.max(1, w).toFixed(1) + '%';
+    return el('div', { class: 'frow' },
+      el('div', { class: 'flab' }, el('span', { text: f.label }), el('b', { class: 'num', text: fmtX(f.factor) })),
+      el('div', { class: 'dtrack2', 'aria-hidden': 'true' }, el('span', { class: 'zero' }), el('i', { class: lc < 0 ? 'neg' : '', style: style })));
   }
 
   function openDetail(slug) {
@@ -462,24 +486,27 @@
         el('h2', { id: 'detail-title', text: row.name }),
         el('p', { class: 'sub', text: (row.category || 'Uncategorized') + ' \u00b7 ' + row.slug + ' \u00b7 records no token in this snapshot' })),
       el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })));
+    var logSum = 0;
+    row.factors.forEach(function (f) { logSum += f.log_contribution; });
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Implied value, step by step' }),
+      el('p', { class: 'why', text: row.rationale }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL (snapshot)' }), el('b', { text: fmtFull(row.tvl_usd) })),
-        el('div', null, el('span', { text: 'x category multiple (' + (row.category || 'global') + ')' }), el('b', { text: fmtX(row.category_multiple) })),
-        el('div', null, el('span', { text: 'x growth factor (7d ' + fmtPct(row.change_7d) + ')' }), el('b', { text: fmtX(row.growth_factor) })),
-        el('div', null, el('span', { text: 'x age factor (' + fmtAge(row.age_days) + ' with no token)' }), el('b', { text: fmtX(row.age_factor) })),
+        row.factors.map(function (f) {
+          return el('div', null, el('span', { text: 'x ' + f.label.split(' \u2014 ')[0].toLowerCase() }), el('b', { text: fmtX(f.factor) }));
+        }),
+        el('div', null, el('span', { text: '= multiple of TVL (six factors combined)' }), el('b', { text: fmtX(Math.pow(10, logSum)) })),
         el('div', { class: 'total' }, el('span', { text: 'Implied value' }), el('b', { text: fmtFull(row.implied_value_usd) }))),
-      el('div', { class: 'viz' },
-        factorBar('Multiple / x3.00 cap', row.category_multiple, 3),
-        factorBar('Growth / x1.60 cap', row.growth_factor, 1.6),
-        factorBar('Age / x1.25 cap', row.age_factor, 1.25)),
+      el('h3', { text: 'Factor contributions \u2014 log space' }),
+      el('div', { class: 'fbars' }, row.factors.map(factorRow)),
+      el('p', { class: 'note', text: 'Each bar is one signal\u2019s log10 contribution on one shared scale \u2014 the board\u2019s widest single contribution is full width \u2014 right of centre lifts the value, left cuts it. The six sum to log10(implied / TVL) = ' + logSum.toFixed(4) + ', the combined multiple in the equation above.' }),
       el('h3', { text: 'Refit range \u2014 leave-one-out' }),
       rangeTrack(row, 'dtrack'),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'Low refit' }), el('b', { text: fmtFull(row.implied_value_low_usd) })),
         el('div', null, el('span', { text: 'High refit' }), el('b', { text: fmtFull(row.implied_value_high_usd) }))),
-      el('p', { class: 'note', text: 'The same figures board.json carries for this row; the multiple is calibrated from live tokens of the same category in the snapshot, not chosen for this protocol. The range is that multiple\u2019s leave-one-out refit spread, re-priced on the board\u2019s log scale. An estimate, not a price.' })));
+      el('p', { class: 'note', text: 'The same figures board.json carries for this row; the model is calibrated from live tokens in the snapshot, not chosen for this protocol. The range is the whole model\u2019s leave-one-out refit spread \u2014 multiples, centres and coefficients refitted per comp left out \u2014 re-priced on the board\u2019s log scale. An estimate, not a price.' })));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm verdict' }),
       el('div', { class: 'equation' },

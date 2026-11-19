@@ -2,28 +2,40 @@
 //
 // The board ranks the snapshot's whole clean pre-token universe — every protocol that records
 // no token and passes the watchlist rule's own visible exclusions, at any TVL (lib/snapshot.ts
-// isCleanPreToken) — by an implied value: what a token would be worth if it were priced the way
-// the market already prices live tokens of the same kind.
+// isCleanPreToken) — by an implied value: what a token would be worth if it were priced the
+// way the market already prices live tokens of the same kind.
 //
-//   implied_value_usd = round( tvl_usd x category_multiple x growth_factor x age_factor )
+// The v4 model (lib/model.ts) prices in log space, as a sum of interpretable parts:
 //
-// - category_multiple is calibrated from the snapshot itself: for each category, take the
-//   median market-cap / TVL ratio of that category's protocols whose token already trades,
-//   shrink it toward the global tokenized median (log-space, prior strength SHRINK_PRIOR) so a
-//   category with two live tokens cannot shout down one with sixty, and clamp to [0.05, 3.0].
-//   A category with no live token uses the global median. No constant is a price: every multiple
-//   on the board is a statistic of the snapshot's own figures.
-// - growth_factor = 1 + clamp(change_7d, -60, +150) / 250, so a hot week lifts a row by up to
-//   1.6x and a bad one cuts it to 0.76x; an unreported change is neutral (factor 1).
-// - age_factor rewards time survived with no token: 0.85 + 0.3 x log10(1 + days_live / 30),
-//   capped to [0.85, 1.25]; an unknown listing date is neutral (factor 1).
-// - each row also carries a value range: its implied value re-priced at the low and high of its
-//   category multiple's leave-one-out refits (lib/calibrate.ts multipleRangeFor) — the spread
-//   the category's own evidence supports, widest where the evidence is thinnest.
+//   log10(implied / TVL) = log10(category multiple) + intercept
+//                        + bSize*size + bMom*momentum + bAge*age + bChains*chains
 //
-// The model is tested, not just stated: lib/validate.ts fits the same multiples on half the
+// - category_multiple is calibrated from the snapshot itself: for each category, the median
+//   market-cap / TVL ratio of that category's protocols whose token already trades, shrunk
+//   toward the global tokenized median (log-space, prior strength 10) so a category with two
+//   live tokens cannot shout down one with sixty, and clamped to [0.05, 3.0]. A category with
+//   no live token uses the global median. No constant is a price: every multiple on the board
+//   is a statistic of the snapshot's own figures.
+// - The four signals are centred features — size (log10 TVL vs the comps' centre), momentum
+//   (the week's TVL change, winsorised to [-60%, +150%]), age (log-scaled days listed vs the
+//   comps' centre) and chain reach (log chain count vs the centre) — whose coefficients are
+//   fitted by ridge regression (one penalty, 5) on the comps' residuals after the category
+//   multiple. On this snapshot the market pays a lower multiple for larger protocols and for
+//   protocols whose TVL just spiked, a mildly lower one for older protocols, and a higher
+//   one for wider chain reach. Each row carries the full breakdown (factors: every signal's
+//   log-space contribution and multiplicative factor, with a label built from the row's own
+//   figures) and a one-line rationale templated from those same values.
+// - Each row also carries a value range: its implied value re-priced under leave-one-out
+//   refits of the whole model — one refit per live comp of the row's category, that comp
+//   left out (lib/model.ts makeLooRanger) — the spread the category's own evidence supports,
+//   widest where the evidence is thinnest.
+//
+// The model is tested, not just stated: lib/validate.ts fits the same model on half the
 // snapshot's live tokens and predicts the other half blind, against a flat global-multiple
 // baseline, and walks forward across TVL bands; the report rides in the dashboard's data.
+// On this snapshot the v4 model beats the flat baseline on both tests (v3's single-signal
+// model lost the walk-forward); the exact figures are computed at run time, never stated
+// as constants — see SPEC.md for the design ledger.
 //
 // Which pre-token protocols the board carries: the clean universe, all of it. The watchlist
 // (40 protocols, the house's vetted floor) is inside it by construction — the exclusions here
@@ -40,43 +52,101 @@
 // against its row's implied value into a FARM / THIN / SKIP verdict (lib/farm.ts). No protocol
 // name is ever special-cased: the same functions score and write every row.
 //
-// This module is the assembly: it wires calibration (lib/calibrate.ts), the factors
-// (lib/factors.ts), the validation (lib/validate.ts), the tier (lib/tiers.ts) and the farm
-// plans (lib/farm.ts) into the board, the dashboard's data and the gate's own pre-flight check.
+// This module is the assembly: it wires the model (lib/model.ts, over lib/calibrate.ts), the
+// validation (lib/validate.ts), the tier (lib/tiers.ts) and the farm plans (lib/farm.ts) into
+// the board, the dashboard's data and the gate's own pre-flight check.
 
-import { calibrate, liveComps, multipleFor, multipleRangeFor } from './calibrate.ts';
-import { ageFactor, growthFactor } from './factors.ts';
+import { calibrate, liveComps, multipleFor } from './calibrate.ts';
 import { farmPlan } from './farm.ts';
+import { breakdownFor, fitModel, makeLooRanger } from './model.ts';
+import type { Breakdown, ModelFit } from './model.ts';
 import { ageDays, isCleanPreToken, isPreToken } from './snapshot.ts';
 import { likelihood } from './tiers.ts';
-import type { BoardRow, LiveRow, RadarData, Snapshot, Verdict } from './types.ts';
-import { round4 } from './util.ts';
+import type { BoardRow, FactorContribution, LiveRow, RadarData, Snapshot, SnapshotProtocol, Verdict } from './types.ts';
+import { round2, round4 } from './util.ts';
 import { validateModel } from './validate.ts';
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'calibrated-3-validated';
+export const MODEL_VERSION = 'multi-signal-4-validated';
 
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
 export const LIVE_ROWS = 30;
 
+/** A compact USD figure for labels and rationales: $2.76B, $320.5M, $45.1K, $900. */
+function fmtUsd(v: number): string {
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
+  return `$${v.toFixed(0)}`;
+}
+
+/** One row's factor breakdown: every signal's contribution, labelled from the row's own figures. */
+function factorBreakdown(p: SnapshotProtocol, days: number | null, fit: ModelFit, b: Breakdown): FactorContribution[] {
+  const cal = fit.calibration.byCategory.get(p.category ?? '');
+  const mk = (signal: FactorContribution['signal'], label: string, log: number): FactorContribution => ({
+    signal,
+    label,
+    log_contribution: round4(log),
+    factor: round4(10 ** log),
+  });
+  return [
+    mk(
+      'category',
+      cal !== undefined
+        ? `Category multiple — ${cal.tokenized_count} live ${p.category ?? 'uncategorised'} comp${cal.tokenized_count === 1 ? '' : 's'}, shrunk toward the global median`
+        : 'Category multiple — no live comps in this category, so the global multiple applies',
+      b.category,
+    ),
+    mk('size', `Size — TVL ${fmtUsd(p.tvl_usd)} against the comps' ${fmtUsd(10 ** fit.centreLogTvl)} centre`, b.size),
+    mk(
+      'momentum',
+      p.change_7d === null
+        ? 'Momentum — no 7-day TVL change reported, so the signal is neutral'
+        : `Momentum — 7-day TVL change ${round2(p.change_7d)}%, winsorised to [-60%, +150%]`,
+      b.momentum,
+    ),
+    mk('age', days === null ? 'Age — listing date unknown, so the signal sits at the comp centre' : `Age — listed ${days} days ago`, b.age),
+    mk('chains', `Chain reach — live on ${p.chains.length} chain${p.chains.length === 1 ? '' : 's'}`, b.chains),
+    mk('global_correction', 'Global correction — the intercept of the comp regression', b.globalCorrection),
+  ];
+}
+
+const SIGNAL_SHORT: Record<string, string> = { size: 'size', momentum: 'weekly momentum', age: 'age', chains: 'chain reach' };
+
+/** A one-line rationale for one row, templated from its own factor values — never hand-written. */
+function rationaleFor(p: SnapshotProtocol, mult: number, factors: FactorContribution[], implied: number): string {
+  const movers = factors
+    .filter((f) => f.signal in SIGNAL_SHORT && Math.abs(f.log_contribution) >= 0.02)
+    .sort((a, b) => Math.abs(b.log_contribution) - Math.abs(a.log_contribution))
+    .slice(0, 3);
+  const adjusted =
+    movers.length > 0
+      ? `, adjusted ${movers.map((f) => `${f.log_contribution >= 0 ? 'up' : 'down'} x${f.factor.toFixed(2)} for ${SIGNAL_SHORT[f.signal]}`).join(', ')}`
+      : ', with no signal adjustment worth naming';
+  const overall = round2(implied / Math.max(1, p.tvl_usd));
+  return `${p.name} prices off a x${mult} ${p.category ?? 'uncategorised'} multiple${adjusted}: an implied ${fmtUsd(implied)}, x${overall} its TVL.`;
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot): BoardRow[] {
-  const cal = calibrate(snapshot);
   const comps = liveComps(snapshot);
+  const fit = fitModel(comps, snapshot.as_of);
+  const loo = makeLooRanger(comps, snapshot.as_of);
   const watch = new Set(snapshot.watchlist);
   const scored = snapshot.protocols
     .filter((p) => isCleanPreToken(p))
     .map((p) => {
       const days = ageDays(snapshot.as_of, p.listed_at);
-      const mult = multipleFor(p, cal);
-      const range = multipleRangeFor(p, cal, comps);
-      const gf = growthFactor(p.change_7d);
-      const af = ageFactor(days);
-      const implied = Math.max(1, Math.round(p.tvl_usd * mult * gf * af));
-      const low = Math.min(implied, Math.max(1, Math.round(p.tvl_usd * range.low * gf * af)));
-      const high = Math.max(implied, Math.max(1, Math.round(p.tvl_usd * range.high * gf * af)));
+      const b = breakdownFor(fit, p);
+      const logRatio = b.category + b.size + b.momentum + b.age + b.chains + b.globalCorrection;
+      const implied = Math.max(1, Math.round(p.tvl_usd * 10 ** logRatio));
+      const range = loo(p);
+      const low = Math.min(implied, Math.max(1, Math.round(p.tvl_usd * 10 ** range.lowLog)));
+      const high = Math.max(implied, Math.max(1, Math.round(p.tvl_usd * 10 ** range.highLog)));
       const plan = farmPlan(p, days, implied);
-      return { p, days, mult, gf, af, implied, low, high, plan };
+      const mult = multipleFor(p, fit.calibration);
+      const factors = factorBreakdown(p, days, fit, b);
+      return { p, days, mult, b, implied, low, high, plan, factors, rationale: rationaleFor(p, mult, factors, implied) };
     });
   scored.sort(
     (a, b) =>
@@ -104,10 +174,14 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     implied_value_high_usd: s.high,
     model: {
       category_multiple: s.mult,
-      growth_factor: round4(s.gf),
-      age_factor: round4(s.af),
+      growth_factor: round4(10 ** s.b.momentum),
+      age_factor: round4(10 ** s.b.age),
+      size_factor: round4(10 ** s.b.size),
+      chain_factor: round4(10 ** s.b.chains),
       likelihood: likelihood(s.p, s.days, watch.has(s.p.slug)),
     },
+    factors: s.factors,
+    rationale: s.rationale,
     farm_cost_usd: s.plan.cost_usd,
     farm_weeks: s.plan.weeks,
     breakeven_pct: s.plan.breakeven_pct,
@@ -168,6 +242,10 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       category_multiple: r.model.category_multiple,
       growth_factor: r.model.growth_factor,
       age_factor: r.model.age_factor,
+      size_factor: r.model.size_factor,
+      chain_factor: r.model.chain_factor,
+      factors: r.factors,
+      rationale: r.rationale,
       implied_value_usd: r.implied_value_usd,
       implied_value_low_usd: r.implied_value_low_usd,
       implied_value_high_usd: r.implied_value_high_usd,

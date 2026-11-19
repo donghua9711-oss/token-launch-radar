@@ -45,6 +45,18 @@ export type Likelihood = 'High' | 'Elevated' | 'Moderate' | 'Speculative';
 /** The farm verdict: whether a plan's cost is worth paying against the row's implied value. */
 export type Verdict = 'FARM' | 'THIN' | 'SKIP';
 
+/**
+ * One signal's contribution to a row's price (lib/model.ts): an additive log10-space
+ * contribution and its multiplicative equivalent, with a plain-language label built from
+ * the row's own figures. A row's contributions sum to log10(implied_value / TVL).
+ */
+export interface FactorContribution {
+  signal: 'category' | 'size' | 'momentum' | 'age' | 'chains' | 'global_correction';
+  label: string;
+  log_contribution: number;
+  factor: number;
+}
+
 /** One row of board.json. */
 export interface BoardRow {
   rank: number;
@@ -62,15 +74,22 @@ export interface BoardRow {
   watchlist: boolean;
   age_days: number | null;
   implied_value_usd: number;
-  /** The leave-one-out refit range around the implied value (lib/calibrate.ts). */
+  /** The leave-one-out refit range around the implied value (lib/model.ts makeLooRanger). */
   implied_value_low_usd: number;
   implied_value_high_usd: number;
   model: {
     category_multiple: number;
+    /** The fitted signals as multiplicative factors: 10^(each signal's log contribution). */
     growth_factor: number;
     age_factor: number;
+    size_factor: number;
+    chain_factor: number;
     likelihood: Likelihood;
   };
+  /** Every signal's log-space contribution to this row's price, with its label (lib/model.ts). */
+  factors: FactorContribution[];
+  /** A one-line rationale templated from this row's own factor values — no hand-written text. */
+  rationale: string;
   /** The farm plan's netting (lib/farm.ts): what the plan costs, over how long, and the verdict. */
   farm_cost_usd: number;
   farm_weeks: number;
@@ -94,6 +113,10 @@ export interface RadarRow {
   category_multiple: number;
   growth_factor: number;
   age_factor: number;
+  size_factor: number;
+  chain_factor: number;
+  factors: FactorContribution[];
+  rationale: string;
   implied_value_usd: number;
   implied_value_low_usd: number;
   implied_value_high_usd: number;

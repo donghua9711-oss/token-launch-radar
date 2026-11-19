@@ -21,3 +21,35 @@ export function slugHash(slug: string): number {
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0;
   return h;
 }
+
+/** The arithmetic mean of a non-empty list of numbers. */
+export function mean(values: number[]): number {
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+/**
+ * Solve A x = b for a small dense system by Gaussian elimination with partial pivoting.
+ * Deterministic: the pivot rule depends only on the values, never on run state. A column
+ * whose pivot is numerically zero yields a zero coefficient rather than a NaN — the ridge
+ * penalties the model adds keep every system it solves well away from that case.
+ */
+export function solveLinear(A: number[][], b: number[]): number[] {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]!]);
+  for (let c = 0; c < n; c++) {
+    let piv = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r]![c]!) > Math.abs(M[piv]![c]!)) piv = r;
+    const swap = M[c]!;
+    M[c] = M[piv]!;
+    M[piv] = swap;
+    const d = M[c]![c]!;
+    if (Math.abs(d) < 1e-12) continue;
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r]![c]! / d;
+      if (f === 0) continue;
+      for (let k = c; k <= n; k++) M[r]![k] = M[r]![k]! - f * M[c]![k]!;
+    }
+  }
+  return M.map((row, i) => (Math.abs(M[i]![i]!) < 1e-12 ? 0 : row[n]! / M[i]![i]!));
+}

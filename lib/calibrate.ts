@@ -1,7 +1,7 @@
-// Calibration: the category multiples, read off the snapshot's own live tokens —
-// and each multiple's leave-one-out refit range, so every board row can carry the
-// spread its category's evidence actually supports. No constant here is a price:
-// every multiple is a statistic of the snapshot itself.
+// Calibration: the category multiples, read off the snapshot's own live tokens.
+// No constant here is a price: every multiple is a statistic of the snapshot itself.
+// (The leave-one-out refit ranges the board carries live in lib/model.ts, whose ranger
+// refits the whole v4 model — multiples plus signal coefficients — per left-out comp.)
 
 import { isPreToken } from './snapshot.ts';
 import { SnapshotError } from './types.ts';
@@ -12,8 +12,12 @@ import { clamp, median, round4 } from './util.ts';
 export const MULTIPLE_MIN = 0.05;
 export const MULTIPLE_MAX = 3.0;
 
-/** Shrinkage prior strength: a category's own median counts n/(n + SHRINK_PRIOR) of its multiple. */
-export const SHRINK_PRIOR = 8;
+/**
+ * Shrinkage prior strength: a category's own median counts n/(n + SHRINK_PRIOR) of its multiple.
+ * v4 raised this from 8 to 10: on the validation splits the stronger shrinkage cost the
+ * holdout almost nothing and measurably steadied the walk-forward fits (see SPEC.md ledger).
+ */
+export const SHRINK_PRIOR = 10;
 
 /** A fitted set of multiples: the global line and one entry per category that has live tokens. */
 export interface Fitted {
@@ -85,27 +89,4 @@ export function calibrate(snapshot: Snapshot): Fitted {
 /** The multiple one protocol is priced with: its category's, or the global when its kind has no live token. */
 export function multipleFor(p: SnapshotProtocol, cal: Fitted): number {
   return cal.byCategory.get(p.category ?? '')?.multiple ?? cal.global.multiple;
-}
-
-/**
- * The leave-one-out refit range of a protocol's multiple: refit its category's multiple
- * once per live comp of that category, each time leaving that one comp out, and take the
- * spread of the refits. A category with a single comp falls back to the global multiple
- * when that comp is left out; a category with no live comp is ranged on the global fit's
- * own leave-one-out refits. Deterministic — no sampling, the same snapshot always
- * spreads the same way. The range measures how much one comp can move the price the
- * board puts on a whole category: thin evidence, wide range.
- */
-export function multipleRangeFor(p: SnapshotProtocol, cal: Fitted, comps: SnapshotProtocol[]): { low: number; high: number } {
-  const key = p.category ?? '';
-  const own = comps.filter((c) => (c.category ?? '') === key);
-  const pool = own.length > 0 ? own : comps;
-  const globalMedian = cal.global.median_ratio;
-  const refits: number[] = [];
-  for (let i = 0; i < pool.length; i++) {
-    const rest = pool.filter((_, j) => j !== i).map((c) => c.mcap_usd! / c.tvl_usd);
-    refits.push(rest.length === 0 ? cal.global.multiple : shrunkMultiple(rest, globalMedian));
-  }
-  if (refits.length === 0) return { low: cal.global.multiple, high: cal.global.multiple };
-  return { low: round4(Math.min(...refits)), high: round4(Math.max(...refits)) };
 }
